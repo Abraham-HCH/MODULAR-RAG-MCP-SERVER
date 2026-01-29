@@ -1661,7 +1661,7 @@ observability:
 | B7.4 | Ollama Embedding 实现 | [x] | 2026-01-28 | OllamaEmbedding + 20个单元测试 |
 | B7.5 | Recursive Splitter 默认实现 | [x] | 2026-01-28 | RecursiveSplitter + 24个单元测试 + langchain集成 |
 | B7.6 | ChromaStore 默认实现 | [x] | 2026-01-30 | ChromaStore + 20个集成测试 + roundtrip验证 |
-| B7.7 | LLM Reranker 实现 | [ ] | - | |
+| B7.7 | LLM Reranker 实现 | [x] | 2026-01-30 | LLMReranker + 20个单元测试 + prompt模板支持 |
 | B7.8 | Cross-Encoder Reranker 实现 | [ ] | - | |
 
 #### 阶段 C：Ingestion Pipeline MVP
@@ -1733,13 +1733,13 @@ observability:
 | 阶段 | 总任务数 | 已完成 | 进度 |
 |------|---------|--------|------|
 | 阶段 A | 3 | 3 | 100% |
-| 阶段 B | 14 | 11 | 79% |
+| 阶段 B | 14 | 12 | 86% |
 | 阶段 C | 15 | 0 | 0% |
 | 阶段 D | 7 | 0 | 0% |
 | 阶段 E | 6 | 0 | 0% |
 | 阶段 F | 5 | 0 | 0% |
 | 阶段 G | 4 | 0 | 0% |
-| **总计** | **54** | **14** | **26%** |
+| **总计** | **54** | **15** | **28%** |
 
 
 ---

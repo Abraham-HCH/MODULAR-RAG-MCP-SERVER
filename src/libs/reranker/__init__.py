@@ -4,7 +4,7 @@ Reranker Module.
 This package contains reranker abstractions and implementations:
 - Base reranker class
 - Reranker factory
-- Implementations (CrossEncoder, LLM Rerank, None)
+- Implementations (LLM Rerank, CrossEncoder, None)
 """
 
 from src.libs.reranker.base_reranker import BaseReranker, NoneReranker

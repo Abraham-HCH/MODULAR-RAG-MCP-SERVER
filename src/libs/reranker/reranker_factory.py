@@ -15,6 +15,12 @@ if TYPE_CHECKING:
     from src.core.settings import Settings
 
 
+def _lazy_import_llm_reranker():
+    """Lazy import to avoid circular dependencies."""
+    from src.libs.reranker.llm_reranker import LLMReranker
+    return LLMReranker
+
+
 class RerankerFactory:
     """Factory for creating Reranker provider instances.
     
@@ -63,6 +69,11 @@ class RerankerFactory:
             ValueError: If the configured provider is not supported or missing.
             RuntimeError: If provider initialization fails.
         """
+        # Lazy register LLM reranker if not already registered
+        if "llm" not in cls._PROVIDERS:
+            LLMReranker = _lazy_import_llm_reranker()
+            cls.register_provider("llm", LLMReranker)
+        
         try:
             rerank_settings = settings.rerank
             if rerank_settings is None:
@@ -83,8 +94,7 @@ class RerankerFactory:
             available = ", ".join(sorted(cls._PROVIDERS.keys())) if cls._PROVIDERS else "none"
             raise ValueError(
                 f"Unsupported Reranker provider: '{provider_name}'. "
-                f"Available providers: {available}. "
-                "Provider implementations will be added in tasks B7.7-B7.8."
+                f"Available providers: {available}."
             )
         
         try:
