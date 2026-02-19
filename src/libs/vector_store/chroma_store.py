@@ -325,10 +325,82 @@ class ChromaStore(BaseVectorStore):
                 metadata={"hnsw:space": "cosine"}
             )
             logger.info(f"Successfully cleared collection '{target_collection}'")
+            # Attempt to close the client to release any OS-level file handles
+            # This is a best-effort call; different chromadb versions expose
+            # different APIs (persist/close/shutdown). Try common method names.
+            try:
+                for method in ("persist", "close", "shutdown", "stop", "dispose"):
+                    if hasattr(self.client, method):
+                        getattr(self.client, method)()
+                        logger.debug(f"Called Chroma client.{method}() to release resources")
+                        break
+            except Exception:
+                # Don't raise during cleanup; just log at debug level
+                logger.debug("Failed to gracefully close Chroma client during clear()")
         except Exception as e:
             raise RuntimeError(
                 f"Failed to clear collection '{collection_name or self.collection_name}': {e}"
             ) from e
+
+    def close(self) -> None:
+        """Best-effort close of the underlying Chroma client to release resources.
+
+        This method attempts several common cleanup method names across ChromaDB
+        versions. It is safe to call multiple times.
+        """
+        if not hasattr(self, "client") or self.client is None:
+            return
+
+        try:
+            # Try direct methods first
+            for method in ("reset", "clear_system_cache", "persist", "close", "shutdown", "stop", "dispose", "terminate"):
+                if hasattr(self.client, method):
+                    try:
+                        getattr(self.client, method)()
+                        logger.debug(f"Called Chroma client.{method}() to release resources")
+                    except Exception:
+                        logger.debug(f"Chroma client.{method}() raised during close attempt")
+
+            # Inspect nested attributes for close-like methods (best-effort)
+            for attr_name in dir(self.client):
+                if attr_name.startswith("_"):
+                    continue
+                try:
+                    attr = getattr(self.client, attr_name)
+                except Exception:
+                    continue
+                for method in ("close", "shutdown", "stop", "dispose", "terminate", "persist"):
+                    if hasattr(attr, method):
+                        try:
+                            getattr(attr, method)()
+                            logger.debug(f"Called Chroma client.{attr_name}.{method}() to release resources")
+                        except Exception:
+                            pass
+
+            # Remove reference and trigger GC to help release OS handles on Windows
+            try:
+                import gc
+                self.collection = None
+                self.client = None
+                gc.collect()
+            except Exception:
+                logger.debug("Failed to clear Chroma client reference or run GC")
+
+            # Small sleep to give OS time to release file handles
+            try:
+                import time
+                time.sleep(0.05)
+            except Exception:
+                pass
+        except Exception:
+            logger.debug("Exception while attempting to close Chroma client")
+
+    def __del__(self) -> None:
+        # Ensure resources are released on object deletion
+        try:
+            self.close()
+        except Exception:
+            pass
     
     def _sanitize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Sanitize metadata to ensure ChromaDB compatibility.
@@ -401,3 +473,4 @@ class ChromaStore(BaseVectorStore):
             'name': self.collection_name,
             'metadata': self.collection.metadata
         }
+

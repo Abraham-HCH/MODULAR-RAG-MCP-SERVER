@@ -25,8 +25,10 @@ def _register_builtin_providers() -> None:
     try:
         from src.libs.splitter.recursive_splitter import RecursiveSplitter
         SplitterFactory.register_provider("recursive", RecursiveSplitter)
-    except ImportError:
-        pass  # RecursiveSplitter not available (missing langchain dependency)
+    except ImportError as e:
+        raise ImportError(
+            "RecursiveSplitter requires langchain-text-splitters. Install it with: pip install langchain-text-splitters"
+        ) from e
 
 
 class SplitterFactory:

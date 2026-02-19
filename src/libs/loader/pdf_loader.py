@@ -311,3 +311,4 @@ class PdfLoader(BaseLoader):
             Unique image ID string.
         """
         return f"{doc_hash[:8]}_{page}_{sequence}"
+

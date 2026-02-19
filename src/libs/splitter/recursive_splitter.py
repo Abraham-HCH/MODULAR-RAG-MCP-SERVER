@@ -41,6 +41,7 @@ class RecursiveSplitter(BaseSplitter):
     
     DEFAULT_SEPARATORS = [
         "\n\n",  # Double newline (paragraphs)
+        "\n---\n",  # Horizontal rule (Markdown header separation)
         "\n",    # Single newline
         ". ",    # Sentence endings
         "! ",
@@ -104,18 +105,55 @@ class RecursiveSplitter(BaseSplitter):
                 f"chunk_size ({self.chunk_size})"
             )
         
-        self.separators = separators if separators is not None else self.DEFAULT_SEPARATORS
+        # Adjust separators to prioritize Markdown structure and avoid splitting within paragraphs
+        self.separators = separators if separators is not None else ["\n---\n", "\n\n", "\n", ". ", "! ", "? ", "; ", ", ", " ", ""]
+
+        # Ensure chunk size and overlap are reasonable for Markdown
+        self.chunk_size = max(self.chunk_size, 50)  # Minimum chunk size
+        self.chunk_overlap = min(self.chunk_overlap, self.chunk_size // 3)  # Overlap should not exceed one-third of the chunk size
+
+        # Add logic to merge small chunks back into larger ones
+        def merge_chunks(chunks):
+            merged = []
+            buffer = ""
+            for chunk in chunks:
+                # Add chunk to buffer if it doesn't exceed the chunk size
+                if len(buffer) + len(chunk) <= self.chunk_size:
+                    buffer = buffer + " " + chunk if buffer else chunk
+                else:
+                    # Append the buffer as a merged chunk
+                    merged.append(buffer.strip())
+                    buffer = chunk  # Start a new buffer with the current chunk
+            if buffer:
+                merged.append(buffer.strip())  # Append any remaining buffer
+
+            # Final pass: merge all chunks if they are still small
+            if len(merged) > 1 and all(len(chunk) <= self.chunk_size for chunk in merged):
+                merged = [" ".join(merged)]
+
+            return merged
         
-        # Initialize LangChain splitter
+        # Initialize the underlying langchain splitter instance
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap,
             separators=self.separators,
-            length_function=len,
-            is_separator_regex=False,
-            **kwargs,
         )
-    
+        
+    def validate_text(self, text: Any) -> None:
+        """Validate input text."""
+        if not isinstance(text, str):
+            raise ValueError("Input text must be a string.")
+        if not text.strip():
+            raise ValueError("Input text cannot be empty or whitespace.")
+
+    def validate_chunks(self, chunks: List[str]) -> None:
+        """Validate output chunks."""
+        if not all(isinstance(chunk, str) for chunk in chunks):
+            raise ValueError("All chunks must be strings.")
+        if not all(chunk.strip() for chunk in chunks):
+            raise ValueError("Chunks cannot be empty or whitespace.")
+
     def split_text(
         self,
         text: str,
@@ -169,3 +207,5 @@ class RecursiveSplitter(BaseSplitter):
                 f"Text length: {len(text)}, chunk_size: {self.chunk_size}, "
                 f"chunk_overlap: {self.chunk_overlap}"
             ) from e
+
+    # NOTE: Duplicate/simple split_text removed. Use the validated split_text above.

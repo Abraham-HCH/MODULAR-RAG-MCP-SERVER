@@ -45,6 +45,7 @@ def chroma_store(test_settings):
     # Cleanup: clear collection after each test
     try:
         store.clear()
+        store.close()
     except Exception:
         pass
 

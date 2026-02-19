@@ -23,4 +23,6 @@ class IngestionPipeline:
         Returns:
             A list of chunks.
         """
-        return self.splitter.split_text(document)
+        # Use the splitter to process the document
+        chunks = self.splitter.split_text(document)
+        return chunks
