@@ -5,7 +5,6 @@ This module defines the ingestion pipeline for processing documents.
 
 from typing import Any, List
 from pathlib import Path
-from PyPDF2 import PdfReader
 import hashlib
 import sqlite3
 import os
@@ -13,8 +12,15 @@ import os
 from src.libs.splitter.splitter_factory import SplitterFactory, SplitterType
 from src.observability.logger import get_logger
 from importlib import import_module
+from types import SimpleNamespace
 
 logger = get_logger(__name__)
+
+# Expose PdfReader at module level so tests can patch it. Import is optional.
+try:
+    from PyPDF2 import PdfReader  # type: ignore
+except Exception:
+    PdfReader = None
 
 class Document:
     """Represents a document with text and metadata."""
@@ -98,6 +104,84 @@ class IngestionPipeline:
                 sha256_hash.update(chunk)
         return sha256_hash.hexdigest()
 
+    def _as_settings_object(self):
+        """Return a settings-like object for factories (supports dict or object)."""
+        if not isinstance(self.settings, dict):
+            return self.settings
+
+        # Build minimal object with nested attrs if provided in dict
+        obj = SimpleNamespace()
+        emb = SimpleNamespace()
+        vs = SimpleNamespace()
+
+        embedding_conf = self.settings.get("embedding", {})
+        vector_conf = self.settings.get("vector_store", {})
+
+        emb.provider = embedding_conf.get("provider")
+        emb.model = embedding_conf.get("model")
+
+        vs.provider = vector_conf.get("provider")
+        vs.collection_name = vector_conf.get("collection_name")
+        vs.persist_directory = vector_conf.get("persist_directory")
+
+        obj.embedding = emb
+        obj.vector_store = vs
+        return obj
+
+    def ingest_file(self, file_path: str) -> dict:
+        """Full ingestion: load file, embed chunks, upsert to vector store, record history.
+
+        Returns a summary dict with keys: file_hash, chunk_count, status.
+        """
+        doc = self.load_pdf(file_path)
+        if doc is None:
+            return {"skipped": True}
+
+        # Split and apply transforms
+        chunk_dicts = self.process_document_with_transforms(doc.text)
+
+        # Compute file hash used as id prefix
+        try:
+            file_hash = self._calculate_file_hash(file_path)
+        except Exception:
+            file_hash = None
+
+        # Create embedding provider and compute embeddings
+        from src.libs.embedding.embedding_factory import EmbeddingFactory
+        from src.libs.vector_store.vector_store_factory import VectorStoreFactory
+
+        settings_obj = self._as_settings_object()
+
+        embedding_provider = EmbeddingFactory.create(settings_obj)
+        texts = [c.get("text", "") for c in chunk_dicts]
+        embeddings = embedding_provider.embed(texts)
+
+        # Prepare records and upsert
+        records = self.prepare_records_for_upsert(chunk_dicts, embeddings=embeddings, id_prefix=file_hash)
+
+        vector_store = VectorStoreFactory.create(settings_obj)
+        vector_store.upsert(records, id_prefix=file_hash)
+
+        # Write ingestion history
+        db_path = "data/db/ingestion_history.db"
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else None
+            cur.execute(
+                """
+INSERT OR REPLACE INTO ingestion_history (file_hash, file_path, file_size, status, chunk_count)
+VALUES (?, ?, ?, ?, ?)
+""",
+                (file_hash, file_path, file_size, "success", len(records)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        return {"file_hash": file_hash, "chunk_count": len(records), "status": "success"}
+
     def _check_ingestion_history(self, file_hash: str) -> bool:
         """Check if the file hash exists in the ingestion history."""
         db_path = "data/db/ingestion_history.db"
@@ -139,6 +223,10 @@ class IngestionPipeline:
             return None
 
         logger.info(f"Loading PDF file: {file_path}")
+        # Use module-level PdfReader (can be patched in tests). Ensure available.
+        if PdfReader is None:
+            raise RuntimeError("PyPDF2 is required to load PDFs")
+
         pdf_reader = PdfReader(file_path)
         text = "\n".join(page.extract_text() for page in pdf_reader.pages)
         metadata = {
@@ -148,3 +236,50 @@ class IngestionPipeline:
         }
         logger.info(f"Loaded PDF with {metadata['page_count']} pages.")
         return Document(text=text, metadata=metadata)
+
+    def prepare_records_for_upsert(
+        self,
+        chunk_dicts: List[dict],
+        embeddings: List[List[float]] | None = None,
+        id_prefix: str | None = None,
+    ) -> List[dict]:
+        """Prepare vector-store records from chunk dicts.
+
+        Generates stable chunk-level IDs using SHA256 over the chunk text.
+
+        Args:
+            chunk_dicts: List of chunk dicts with keys `text` and `metadata`.
+            embeddings: Optional list of embedding vectors aligned with chunks.
+            id_prefix: Optional prefix to namespace IDs (e.g., document hash).
+
+        Returns:
+            List of records suitable for VectorStore.upsert(), each with:
+                - 'id': stable str id (sha256)
+                - 'vector': embedding vector if provided
+                - 'metadata': metadata dict including original chunk metadata
+        """
+        records = []
+        for idx, chunk in enumerate(chunk_dicts):
+            text = (chunk.get("text") or "").strip()
+            hasher = hashlib.sha256()
+            # Use canonicalized text as the input for stable ids
+            hasher.update(text.encode("utf-8"))
+            hex_digest = hasher.hexdigest()
+
+            record_id = f"{id_prefix + '_' if id_prefix else ''}{hex_digest}"
+
+            record: dict = {"id": record_id, "metadata": dict(chunk.get("metadata", {}))}
+
+            if embeddings:
+                try:
+                    record["vector"] = embeddings[idx]
+                except Exception:
+                    # If embeddings length mismatches, leave vector absent; caller must validate
+                    record["vector"] = None
+
+            # Include chunk text in metadata to help store/search pipelines
+            record["metadata"]["text"] = text
+
+            records.append(record)
+
+        return records

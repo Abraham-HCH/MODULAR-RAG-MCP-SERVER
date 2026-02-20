@@ -100,12 +100,32 @@ class PdfLoader(BaseLoader):
         doc_id = f"doc_{doc_hash[:16]}"
         
         # Parse PDF with MarkItDown
+        text_content = None
+        # Prefer MarkItDown but fallback to PyPDF2 if MarkItDown fails or its
+        # optional pdf dependencies are missing.
         try:
             result = self._markitdown.convert(str(path))
             text_content = result.text_content if hasattr(result, 'text_content') else str(result)
         except Exception as e:
-            logger.error(f"Failed to parse PDF {path}: {e}")
-            raise RuntimeError(f"PDF parsing failed: {e}") from e
+            logger.warning(f"MarkItDown parsing failed or missing extras for {path}: {e}")
+            # Try to fallback to PyPDF2 to extract plain text if available
+            try:
+                # Try PyPDF2 (older package name) then pypdf (newer name)
+                try:
+                    from PyPDF2 import PdfReader
+                except Exception:
+                    from pypdf import PdfReader
+
+                reader = PdfReader(str(path))
+                # PdfReader.pages yields page objects with extract_text()/extract_text
+                text_content = "\n".join(
+                    (getattr(p, 'extract_text')() if hasattr(p, 'extract_text') else str(p)) or ""
+                    for p in reader.pages
+                )
+                logger.info(f"Fallback to PdfReader succeeded for {path}")
+            except Exception as e2:
+                logger.error(f"Failed to parse PDF {path} with MarkItDown and PdfReader: {e2}")
+                raise RuntimeError(f"PDF parsing failed: {e2}") from e2
         
         # Initialize metadata
         metadata: Dict[str, Any] = {
