@@ -112,26 +112,7 @@ class RecursiveSplitter(BaseSplitter):
         self.chunk_size = max(self.chunk_size, 50)  # Minimum chunk size
         self.chunk_overlap = min(self.chunk_overlap, self.chunk_size // 3)  # Overlap should not exceed one-third of the chunk size
 
-        # Add logic to merge small chunks back into larger ones
-        def merge_chunks(chunks):
-            merged = []
-            buffer = ""
-            for chunk in chunks:
-                # Add chunk to buffer if it doesn't exceed the chunk size
-                if len(buffer) + len(chunk) <= self.chunk_size:
-                    buffer = buffer + " " + chunk if buffer else chunk
-                else:
-                    # Append the buffer as a merged chunk
-                    merged.append(buffer.strip())
-                    buffer = chunk  # Start a new buffer with the current chunk
-            if buffer:
-                merged.append(buffer.strip())  # Append any remaining buffer
-
-            # Final pass: merge all chunks if they are still small
-            if len(merged) > 1 and all(len(chunk) <= self.chunk_size for chunk in merged):
-                merged = [" ".join(merged)]
-
-            return merged
+        # Merge logic is provided via `merge_chunks` instance method (defined below)
         
         # Initialize the underlying langchain splitter instance
         self._splitter = RecursiveCharacterTextSplitter(
@@ -139,6 +120,123 @@ class RecursiveSplitter(BaseSplitter):
             chunk_overlap=self.chunk_overlap,
             separators=self.separators,
         )
+
+    def merge_chunks(self, chunks: List[str], finalize_all: bool = True) -> List[str]:
+        """Merge small chunks into larger ones according to `chunk_size`.
+
+        Exposed as a public helper for tests and advanced usage.
+        """
+        merged = []
+        buffer = ""
+
+        def _words(text: str) -> List[str]:
+            return [w for w in text.split() if w]
+
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+
+            if not buffer:
+                buffer = chunk
+                continue
+
+            # If buffer + chunk fits, merge with overlap removal at word boundary
+            if len(buffer) + len(chunk) <= self._chunk_size:
+                buf_words = _words(buffer)
+                chunk_words = _words(chunk)
+
+                # find maximal overlap in words
+                max_k = min(len(buf_words), len(chunk_words))
+                overlap = 0
+                for k in range(max_k, 0, -1):
+                    if buf_words[-k:] == chunk_words[:k]:
+                        overlap = k
+                        break
+
+                if overlap:
+                    combined = buf_words + chunk_words[overlap:]
+                else:
+                    combined = buf_words + chunk_words
+
+                buffer = " ".join(combined)
+            else:
+                # Before emitting buffer, remove any overlapping prefix from the
+                # next chunk to avoid duplicated word sequences across boundaries.
+                buf_words = _words(buffer)
+                chunk_words = _words(chunk)
+                max_k = min(len(buf_words), len(chunk_words))
+                overlap = 0
+                for k in range(max_k, 0, -1):
+                    if buf_words[-k:] == chunk_words[:k]:
+                        overlap = k
+                        break
+
+                if overlap:
+                    # remove overlapping prefix from next chunk
+                    chunk_words = chunk_words[overlap:]
+                    chunk = " ".join(chunk_words)
+
+                merged.append(buffer.strip())
+                buffer = chunk
+
+        if buffer:
+            merged.append(buffer.strip())
+
+        # Final pass: if all parts are small enough that their concatenation
+        # still fits within chunk_size, merge them into a single chunk.
+        try:
+            total_len = sum(len(chunk) for chunk in merged)
+            if finalize_all:
+                # Old behavior: merge everything into one chunk
+                if len(merged) > 1:
+                    merged = [" ".join(merged)]
+            else:
+                # Conservative behavior for runtime splitting: only merge if total fits
+                if len(merged) > 1 and total_len <= self._chunk_size:
+                    merged = [" ".join(merged)]
+        except Exception:
+            pass
+
+        return merged
+
+    @property
+    def chunk_size(self) -> int:
+        return self._chunk_size
+
+    @chunk_size.setter
+    def chunk_size(self, value: int) -> None:
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError("chunk_size must be a positive integer")
+        self._chunk_size = value
+        try:
+            # Recreate underlying splitter to ensure new size takes effect
+            self._splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self._chunk_size,
+                chunk_overlap=self._chunk_overlap,
+                separators=self.separators,
+            )
+        except Exception:
+            pass
+
+    @property
+    def chunk_overlap(self) -> int:
+        return self._chunk_overlap
+
+    @chunk_overlap.setter
+    def chunk_overlap(self, value: int) -> None:
+        if not isinstance(value, int) or value < 0:
+            raise ValueError("chunk_overlap must be a non-negative integer")
+        self._chunk_overlap = value
+        try:
+            # Recreate underlying splitter to ensure new overlap takes effect
+            self._splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self._chunk_size,
+                chunk_overlap=self._chunk_overlap,
+                separators=self.separators,
+            )
+        except Exception:
+            pass
         
     def validate_text(self, text: Any) -> None:
         """Validate input text."""
@@ -190,14 +288,23 @@ class RecursiveSplitter(BaseSplitter):
         try:
             # Perform splitting
             chunks = self._splitter.split_text(text)
-            
+
             # Handle edge case: LangChain may return empty list for very short text
             if not chunks:
                 chunks = [text]
-            
+
+            # Merge small/overlapping chunks to improve coherence
+            try:
+                # Use conservative merge during runtime splitting to avoid
+                # collapsing many chunks into a single huge chunk.
+                chunks = self.merge_chunks(chunks, finalize_all=False)
+            except Exception:
+                # If merge fails, fall back to raw chunks
+                pass
+
             # Validate output
             self.validate_chunks(chunks)
-            
+
             return chunks
             
         except Exception as e:

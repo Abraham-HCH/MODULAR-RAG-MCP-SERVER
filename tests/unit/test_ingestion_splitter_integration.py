@@ -9,6 +9,7 @@ from src.ingestion.pipeline import IngestionPipeline
 from src.libs.splitter.splitter_factory import SplitterFactory
 from src.libs.splitter.base_splitter import BaseSplitter
 from src.libs.splitter.recursive_splitter import RecursiveSplitter
+from src.libs.splitter.splitter_factory import SplitterType
 
 class FakeSplitter(BaseSplitter):
     def __init__(self, settings: Any = None, **kwargs: Any) -> None:
@@ -23,8 +24,7 @@ def test_ingestion_pipeline_with_splitter():
     SplitterFactory.register_provider("fake", FakeSplitter)
 
     settings = MagicMock()
-    settings.ingestion = MagicMock()
-    settings.ingestion.splitter = "fake"
+    settings.get.return_value = SplitterType.FAKE  # Return proper SplitterType
 
     pipeline = IngestionPipeline(settings)
     document = "This is a test document."
@@ -36,6 +36,7 @@ def test_ingestion_pipeline_chunk_size(mock_settings):
     """
     Test that changing the chunk size in settings affects the output of the pipeline.
     """
+    mock_settings.get.return_value = SplitterType.FAKE  # Return proper SplitterType
     mock_settings.ingestion.chunk_size = 10
     pipeline = IngestionPipeline(settings=mock_settings)
 
@@ -51,8 +52,7 @@ def test_ingestion_pipeline_with_recursive_splitter():
     SplitterFactory.register_provider("recursive", RecursiveSplitter)
 
     settings = MagicMock()
-    settings.ingestion = MagicMock()
-    settings.ingestion.splitter = "recursive"
+    settings.get.return_value = SplitterType.RECURSIVE  # Return proper SplitterType
     settings.ingestion.chunk_size = 100
     settings.ingestion.chunk_overlap = 10
 
@@ -94,12 +94,10 @@ def test_ingestion_pipeline_with_sample_document():
         document = file.read()
 
     # Register and use RecursiveSplitter
-    from src.libs.splitter.recursive_splitter import RecursiveSplitter
     SplitterFactory.register_provider("recursive", RecursiveSplitter)
 
     settings = MagicMock()
-    settings.ingestion = MagicMock()
-    settings.ingestion.splitter = "recursive"
+    settings.get.return_value = SplitterType.RECURSIVE  # Return proper SplitterType
     settings.ingestion.chunk_size = 100
     settings.ingestion.chunk_overlap = 10
 

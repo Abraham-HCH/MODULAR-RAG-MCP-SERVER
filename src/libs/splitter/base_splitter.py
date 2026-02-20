@@ -45,7 +45,18 @@ class BaseSplitter(ABC):
             ValueError: If input text is invalid.
             RuntimeError: If the splitter fails unexpectedly.
         """
-        pass
+        raise NotImplementedError()
+
+    def __init__(self, settings: Optional[Any] = None, **kwargs: Any) -> None:
+        """Optional initializer for splitter implementations.
+
+        Subclasses may accept additional constructor arguments, but the factory
+        will always pass `settings` to the provider. Providing a default
+        implementation here avoids requiring every provider to implement an
+        explicit `__init__` if they only need to store `settings`.
+        """
+        self.settings = settings
+        self._init_kwargs = kwargs
     
     def validate_text(self, text: str) -> None:
         """Validate input text.
